@@ -1,34 +1,28 @@
 const express = require("express");
 const cors = require("cors");
 const jwt = require("jsonwebtoken");
-const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
+const {
+  MongoClient,
+  ServerApiVersion,
+  ObjectId,
+} = require("mongodb");
+
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 5000;
 
+// =========================
 // Middleware
+// =========================
+
 app.use(cors());
 app.use(express.json());
 
-// JWT
-app.post("/jwt", (req, res) => {
-  const user = req.body;
-
-  console.log("JWT user:", user);
-
-  const token = jwt.sign(
-    user,
-    process.env.ACCESS_TOKEN_SECRET,
-    {
-      expiresIn: "1h",
-    }
-  );
-
-  res.send({ token });
-});
-
+// =========================
 // MongoDB
+// =========================
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.uckzgsu.mongodb.net/?retryWrites=true&w=majority`;
 
 const client = new MongoClient(uri, {
@@ -39,7 +33,113 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Verify JWT
+let db;
+let serviceCollection;
+let bookingCollection;
+
+async function connectDB() {
+  if (db) {
+    return;
+  }
+
+  await client.connect();
+
+  db = client.db("cardoctor");
+
+  serviceCollection = db.collection("services");
+  bookingCollection = db.collection("bookings");
+
+  console.log("MongoDB connected");
+}
+
+// =========================
+// Root
+// =========================
+
+app.get("/", (req, res) => {
+  res.send("Car Doctor server is running........");
+});
+
+// =========================
+// JWT
+// =========================
+
+app.post("/jwt", async (req, res) => {
+  try {
+    const user = req.body;
+
+    const token = jwt.sign(
+      user,
+      process.env.ACCESS_TOKEN_SECRET,
+      {
+        expiresIn: "1h",
+      }
+    );
+
+    res.send({ token });
+  } catch (error) {
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// =========================
+// SERVICES
+// =========================
+
+// Get all services
+app.get("/services", async (req, res) => {
+  try {
+    await connectDB();
+
+    const result = await serviceCollection
+      .find({})
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    console.error("Services error:", error);
+
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// Get single service
+app.get("/services/:id", async (req, res) => {
+  try {
+    await connectDB();
+
+    const id = req.params.id;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        error: true,
+        message: "Invalid service ID",
+      });
+    }
+
+    const result = await serviceCollection.findOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// =========================
+// JWT VERIFY
+// =========================
+
 const verifyJWT = (req, res, next) => {
   const authorization = req.headers.authorization;
 
@@ -69,201 +169,129 @@ const verifyJWT = (req, res, next) => {
   );
 };
 
-async function run() {
+// =========================
+// BOOKINGS
+// =========================
+
+app.get("/bookings", verifyJWT, async (req, res) => {
   try {
-    await client.connect();
+    await connectDB();
 
-    const db = client.db("cardoctor");
+    const decoded = req.decoded;
 
-    const serviceCollection = db.collection("services");
-    const bookingCollection = db.collection("bookings");
+    if (decoded.email !== req.query.email) {
+      return res.status(403).send({
+        error: true,
+        message: "Forbidden access",
+      });
+    }
 
-    // =========================
-    // SERVICES
-    // =========================
+    const result = await bookingCollection
+      .find({
+        email: req.query.email,
+      })
+      .toArray();
 
-    // Get all services
-    app.get("/services", async (req, res) => {
-      try {
-        const result = await serviceCollection.find().toArray();
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // Get single service
-    app.get("/services/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-
-        const query = {
-          _id: new ObjectId(id),
-        };
-
-        const options = {
-          projection: {
-            title: 1,
-            price: 1,
-            service_id: 1,
-            img: 1,
-          },
-        };
-
-        const result = await serviceCollection.findOne(
-          query,
-          options
-        );
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // =========================
-    // BOOKINGS
-    // =========================
-
-    // Get bookings for logged-in user
-    app.get("/bookings", verifyJWT, async (req, res) => {
-      try {
-        const decoded = req.decoded;
-
-        console.log("Decoded JWT:", decoded);
-
-        // Check user's email
-        if (decoded.email !== req.query.email) {
-          return res.status(403).send({
-            error: true,
-            message: "Forbidden access",
-          });
-        }
-
-        let query = {};
-
-        if (req.query.email) {
-          query = {
-            email: req.query.email,
-          };
-        }
-
-        const result = await bookingCollection
-          .find(query)
-          .toArray();
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // Add booking
-    app.post("/bookings", async (req, res) => {
-      try {
-        const booking = req.body;
-
-        console.log("New booking:", booking);
-
-        const result = await bookingCollection.insertOne(booking);
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // Update booking status
-    app.patch("/bookings/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-
-        const filter = {
-          _id: new ObjectId(id),
-        };
-
-        // FIX: req.body, NOT res.body
-        const updatedBooking = req.body;
-
-        const updatedDoc = {
-          $set: {
-            status: updatedBooking.status,
-          },
-        };
-
-        const result = await bookingCollection.updateOne(
-          filter,
-          updatedDoc
-        );
-
-        // FIX: res.send, NOT req.send
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // Delete booking
-    app.delete("/bookings/:id", async (req, res) => {
-      try {
-        const id = req.params.id;
-
-        const query = {
-          _id: new ObjectId(id),
-        };
-
-        const result = await bookingCollection.deleteOne(query);
-
-        res.send(result);
-      } catch (error) {
-        res.status(500).send({
-          error: true,
-          message: error.message,
-        });
-      }
-    });
-
-    // MongoDB connection test
-    await client.db("admin").command({
-      ping: 1,
-    });
-
-    console.log(
-      "Pinged your deployment. Successfully connected to MongoDB!"
-    );
+    res.send(result);
   } catch (error) {
-    console.error("MongoDB connection error:", error);
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
   }
-}
-
-run();
-
-// Root route
-app.get("/", (req, res) => {
-  res.send("Car Doctor server is running........");
 });
 
-// Start server
+// Add booking
+app.post("/bookings", async (req, res) => {
+  try {
+    await connectDB();
+
+    const result = await bookingCollection.insertOne(
+      req.body
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// Update booking
+app.patch("/bookings/:id", async (req, res) => {
+  try {
+    await connectDB();
+
+    const id = req.params.id;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        error: true,
+        message: "Invalid booking ID",
+      });
+    }
+
+    const result = await bookingCollection.updateOne(
+      {
+        _id: new ObjectId(id),
+      },
+      {
+        $set: {
+          status: req.body.status,
+        },
+      }
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// Delete booking
+app.delete("/bookings/:id", async (req, res) => {
+  try {
+    await connectDB();
+
+    const id = req.params.id;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        error: true,
+        message: "Invalid booking ID",
+      });
+    }
+
+    const result = await bookingCollection.deleteOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      error: true,
+      message: error.message,
+    });
+  }
+});
+
+// =========================
+// Local server
+// =========================
+
 if (process.env.NODE_ENV !== "production") {
   app.listen(port, () => {
     console.log(`Car Doctor server is running on port ${port}`);
   });
 }
 
-module.exports = app;
+// =========================
+// Vercel
+// =========================
 
+module.exports = app;
