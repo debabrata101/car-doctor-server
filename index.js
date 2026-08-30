@@ -259,6 +259,11 @@ app.get("/", (req, res) => {
 });
 
 // Start server
-app.listen(port, () => {
-  console.log(`Car Doctor server is running on port ${port}`);
-});
+if (process.env.NODE_ENV !== "production") {
+  app.listen(port, () => {
+    console.log(`Car Doctor server is running on port ${port}`);
+  });
+}
+
+module.exports = app;
+
